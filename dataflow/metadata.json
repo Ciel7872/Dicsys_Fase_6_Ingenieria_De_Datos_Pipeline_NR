@@ -1,0 +1,11 @@
+{
+  "name": "pubsub-to-bigquery-streaming",
+  "description": "Pipeline streaming de eventos hacia BigQuery",
+  "parameters": [
+    {"name": "project", "label": "Project ID", "type": "text"},
+    {"name": "topic", "label": "Topic ID", "type": "text"},
+    {"name": "subscription", "label": "Subscription ID", "type": "text"},
+    {"name": "output-table", "label": "Tabla BigQuery (output)", "type": "text"},
+    {"name": "deadletter-table", "label": "Tabla Dead Letter", "type": "text"}
+  ]
+}

@@ -1,0 +1,22 @@
+# Credenciales de GCP
+config/gcp_credentials.json
+config/gcp_credentials2.json
+config/*.key
+*.pem
+*.p12
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Archivos de entorno
+config/variables.env
+.env
+
+# Logs y cachés
+*.log
+__pycache__/
+*.pyc
+.pytest_cache/
+estructura.txt

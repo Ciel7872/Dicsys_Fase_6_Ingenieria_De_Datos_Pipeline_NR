@@ -1,0 +1,7 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/dataleaguenovaretail/dataflow-streaming:latest', '-f', 'dataflow/Dockerfile', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/dataleaguenovaretail/dataflow-streaming:latest']
+images:
+  - 'gcr.io/dataleaguenovaretail/dataflow-streaming:latest'

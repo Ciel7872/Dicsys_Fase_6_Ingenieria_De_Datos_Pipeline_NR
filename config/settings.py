@@ -1,0 +1,64 @@
+"""obj: carga las credenciales desde variables de entorno y define constantes globales."""
+
+import os
+from pathlib import Path
+import logging
+from google.oauth2 import service_account
+
+# ---------- LOGGING ----------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ---------- VARIABLES DE ENTORNO ----------
+# Cargar desde .env (opcional, instalar python-dotenv)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+except ImportError:
+    logger.info("python-dotenv no está instalado; se usarán las variables del entorno actual.")
+
+# Proyecto
+PROJECT_ID = os.getenv("GCP_PROJECT_ID", "dataleaguenovaretail")
+REGION = os.getenv("GCP_REGION", "us-south1")
+
+# Pub/Sub
+TOPIC_ID = os.getenv("PUBSUB_TOPIC", "eventos-realtime")
+SUBSCRIPTION_ID = os.getenv("PUBSUB_SUBSCRIPTION", "eventos-realtime-sub")
+
+# BigQuery
+BQ_DATASET = os.getenv("BQ_DATASET", "nR_core_datasets")
+BRONZE_TABLE = os.getenv("BQ_BRONZE_TABLE", "bronze_events")
+DEADLETTER_TABLE = os.getenv("BQ_DEADLETTER_TABLE", "deadletter_events")
+
+# Rutas de credenciales
+CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "config/gcp_credentials.json")
+CREDENTIALS_PATH = Path(CREDENTIALS_PATH).resolve()
+
+# Verificar que el archivo de credenciales existe
+if not CREDENTIALS_PATH.exists():
+    logger.warning(f"No se encontró el archivo de credenciales en {CREDENTIALS_PATH}. "
+                   "Asegúrate de tenerlo en config/ o de establecer la variable de entorno.")
+
+# ---------- FUNCIÓN PARA OBTENER CLIENTES AUTENTICADOS ----------
+def get_credentials():
+    """Devuelve las credenciales de Google Cloud usando el archivo de servicio."""
+    if CREDENTIALS_PATH.exists():
+        credentials = service_account.Credentials.from_service_account_file(
+            str(CREDENTIALS_PATH),
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        logger.info(f"Cargadas credenciales desde {CREDENTIALS_PATH}")
+        return credentials
+    else:
+        # Si no existe, intenta con las credenciales por defecto de GCP
+        logger.warning("Usando credenciales por defecto (Application Default Credentials).")
+        return None
+
+# ---------- CONSTANTES ADICIONALES ----------
+# Buckets de GCS (necesarios para Dataflow)
+STAGING_BUCKET = os.getenv("GCS_STAGING_BUCKET", "novaretail-dataflow-staging")
+TEMP_BUCKET = os.getenv("GCS_TEMP_BUCKET", "novaretail-temp")
+
+# Otras configuraciones
+BATCH_SIZE = int(os.getenv("PUBSUB_BATCH_SIZE", 50))
+SLEEP_BETWEEN_BATCHES = float(os.getenv("PUBSUB_SLEEP_SECONDS", 0.5))
