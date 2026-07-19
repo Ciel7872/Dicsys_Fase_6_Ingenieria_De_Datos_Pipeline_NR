@@ -8,7 +8,7 @@ from typing import Any
 
 def resolve_project_root() -> Path:
     """Devuelve la ruta raíz del proyecto."""
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[2]
 
 
 def get_airflow_env_var(name: str, default: str | None = None) -> str | None:
@@ -29,3 +29,9 @@ def build_dataflow_parameters(project_id: str, topic_id: str, output_table: str,
         "output-table": output_table,
         "deadletter-table": deadletter_table,
     }
+
+
+def load_sql_query(sql_path: str | Path) -> str:
+    """Lee un archivo SQL desde disco."""
+    path = Path(sql_path)
+    return path.read_text(encoding="utf-8")

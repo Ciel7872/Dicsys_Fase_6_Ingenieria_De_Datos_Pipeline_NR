@@ -1,0 +1,38 @@
+version: 2
+
+models:
+  - name: stg_bronze_events
+    description: "Staging model de eventos bronze - capa intermedia para limpieza"
+    columns:
+      - name: event_id
+        description: "ID unico del evento"
+        tests:
+          - unique
+          - not_null
+      - name: date_id
+        description: "Fecha del evento en formato YYYYMMDD"
+        tests:
+          - not_null
+      - name: customer_id
+        description: "ID del cliente"
+      - name: product_id
+        description: "ID del producto"
+      - name: session_id
+        description: "ID de sesion"
+      - name: event_type
+        description: "Tipo de evento (login, view, add_to_cart, checkout, purchase, cart_abandoned)"
+        tests:
+          - accepted_values:
+              values: ['login', 'view', 'add_to_cart', 'checkout', 'purchase', 'cart_abandoned']
+      - name: ingestion_time
+        description: "Timestamp de ingesta"
+        tests:
+          - not_null
+
+sources:
+  - name: bronze
+    database: dataleaguenovaretail
+    schema: nR_core_datasets
+    tables:
+      - name: bronze_events
+        description: "Tabla bronze de eventos en tiempo real"

@@ -32,7 +32,18 @@ DEADLETTER_TABLE = os.getenv("BQ_DEADLETTER_TABLE", "deadletter_events")
 
 # Rutas de credenciales
 CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "config/gcp_credentials.json")
-CREDENTIALS_PATH = Path(CREDENTIALS_PATH).resolve()
+
+
+def resolve_credentials_path() -> Path:
+    """Resuelve la ruta de las credenciales de forma robusta."""
+    raw_value = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", str(CREDENTIALS_PATH))
+    path = Path(raw_value).expanduser()
+    if not path.is_absolute():
+        path = (Path(__file__).resolve().parent.parent / path).resolve()
+    return path
+
+
+CREDENTIALS_PATH = resolve_credentials_path()
 
 # Verificar que el archivo de credenciales existe
 if not CREDENTIALS_PATH.exists():
@@ -42,12 +53,13 @@ if not CREDENTIALS_PATH.exists():
 # ---------- FUNCIÓN PARA OBTENER CLIENTES AUTENTICADOS ----------
 def get_credentials():
     """Devuelve las credenciales de Google Cloud usando el archivo de servicio."""
-    if CREDENTIALS_PATH.exists():
+    path = resolve_credentials_path()
+    if path.exists():
         credentials = service_account.Credentials.from_service_account_file(
-            str(CREDENTIALS_PATH),
+            str(path),
             scopes=["https://www.googleapis.com/auth/cloud-platform"]
         )
-        logger.info(f"Cargadas credenciales desde {CREDENTIALS_PATH}")
+        logger.info(f"Cargadas credenciales desde {path}")
         return credentials
     else:
         # Si no existe, intenta con las credenciales por defecto de GCP

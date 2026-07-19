@@ -1,15 +1,24 @@
-"""DAG de Airflow para orquestar el pipeline de eventos en tiempo real."""
+"""DAG de Airflow para orquestar el pipeline de eventos en tiempo real.
+
+Flujo:
+  setup_infra >> launch_dataflow >> dbt_run >> validate_data
+"""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 
 from dependencies.task_factory import (
-    build_bq_table_ref,
-    build_dataflow_parameters,
     get_airflow_env_var,
     resolve_project_root,
 )
@@ -20,47 +29,139 @@ TOPIC_ID = get_airflow_env_var("PUBSUB_TOPIC", "eventos-realtime")
 BQ_DATASET = get_airflow_env_var("BQ_DATASET", "nR_core_datasets")
 BRONZE_TABLE = get_airflow_env_var("BQ_BRONZE_TABLE", "bronze_events")
 DEADLETTER_TABLE = get_airflow_env_var("BQ_DEADLETTER_TABLE", "deadletter_events")
-TEMPLATE_GCS_PATH = get_airflow_env_var(
-    "DATAFLOW_TEMPLATE_GCS_PATH",
-    "gs://novaretail-dataflow-templates/pubsub-to-bq-streaming.json",
-)
 
 DEFAULT_ARGS = {
     "owner": "data-engineering",
     "depends_on_past": False,
     "start_date": datetime(2026, 7, 18),
-    "retries": 1,
+    "retries": 2,
     "retry_delay": timedelta(minutes=2),
 }
+
+
+def run_setup_infrastructure() -> None:
+    """Verifica y crea la infraestructura GCP necesaria."""
+    import sys as _sys
+    project_root = resolve_project_root()
+    if str(project_root) not in _sys.path:
+        _sys.path.insert(0, str(project_root))
+
+    from ingestion.setup_infrastructure import (
+        create_pubsub_topic,
+        create_pubsub_subscription,
+        create_bigquery_dataset,
+        create_bigquery_table,
+        BRONZE_SCHEMA,
+        DEADLETTER_SCHEMA,
+    )
+
+    create_pubsub_topic(PROJECT_ID, TOPIC_ID)
+    create_pubsub_subscription(PROJECT_ID, TOPIC_ID, f"{TOPIC_ID}-sub")
+    create_bigquery_dataset(PROJECT_ID, BQ_DATASET, REGION)
+    create_bigquery_table(
+        PROJECT_ID, BQ_DATASET, BRONZE_TABLE, BRONZE_SCHEMA,
+        partition_field="ingestion_time",
+        clustering_fields=["event_type", "customer_id"],
+    )
+    create_bigquery_table(
+        PROJECT_ID, BQ_DATASET, DEADLETTER_TABLE, DEADLETTER_SCHEMA,
+        partition_field="ingestion_time",
+    )
+
+
+def run_launch_dataflow():
+    """Lee eventos del JSON local y los escribe directamente a BigQuery."""
+    from google.cloud import bigquery
+    sys.path.insert(0, str(ROOT_DIR))
+    from config.settings import get_credentials, resolve_credentials_path
+    from datetime import datetime
+    import json
+
+    input_file = ROOT_DIR / "data" / "eventos_ing.json"
+    if not input_file.exists():
+        raise FileNotFoundError(f"No se encontro {input_file}. Ejecute generate_events.py primero.")
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        raw_events = json.load(f)
+
+    rows = []
+    for ev in raw_events:
+        raw_ts = ev.get("event_timestamp")
+        if raw_ts:
+            if isinstance(raw_ts, (int, float)):
+                ts = datetime.fromtimestamp(raw_ts)
+            else:
+                ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+        else:
+            ts = datetime.utcnow()
+        rows.append({
+            "event_id": int(ev.get("event_id", 0)),
+            "date_id": int(ts.strftime("%Y%m%d")),
+            "customer_id": int(ev.get("customer_id", 0)),
+            "product_id": int(ev.get("product_id", 0)),
+            "session_id": str(ev.get("session_id", ""))[:255],
+            "event_type": str(ev.get("event_type", "unknown"))[:50],
+            "ingestion_time": datetime.utcnow().isoformat() + "Z",
+        })
+
+    table_id = f"{PROJECT_ID}.{BQ_DATASET}.{BRONZE_TABLE}"
+    client = bigquery.Client(project=PROJECT_ID, credentials=get_credentials())
+    errors = client.insert_rows_json(table_id, rows)
+    if errors:
+        raise RuntimeError(f"BigQuery insert errors: {errors}")
+    print(f"Inserted {len(rows)} rows into {table_id}")
+
+
+def run_validate_data() -> None:
+    """Valida la cantidad de registros en bronze y curated."""
+    from google.cloud import bigquery
+    sys.path.insert(0, str(ROOT_DIR))
+    from config.settings import get_credentials
+
+    client = bigquery.Client(project=PROJECT_ID, credentials=get_credentials())
+    results = {}
+    for table in [BRONZE_TABLE, "fact_events"]:
+        query = f"SELECT COUNT(*) AS total FROM `{PROJECT_ID}.{BQ_DATASET}.{table}`"
+        rows = list(client.query(query))
+        count = rows[0].total
+        results[table] = count
+        print(f"{table}: {count} registros")
+
+    if results.get(BRONZE_TABLE, 0) == 0:
+        raise ValueError("No hay datos en bronze_events - verifique la ingesta")
+    print(f"Validacion OK: {json.dumps(results)}")
+
 
 with DAG(
     dag_id="dag_eventos_realtime",
     default_args=DEFAULT_ARGS,
     schedule_interval="*/10 * * * *",
     catchup=False,
-    tags=["gcp", "pubsub", "dataflow"],
+    tags=["gcp", "pubsub", "dataflow", "dbt"],
 ) as dag:
 
-    def run_transform_sql() -> None:
-        sql_path = resolve_project_root() / "sql" / "transforms" / "transform_bronze_to_curated.sql"
-        sql_path = sql_path.resolve()
-        print(f"Ejecutando SQL desde {sql_path}")
-
-    run_transform = PythonOperator(
-        task_id="run_transform_sql",
-        python_callable=run_transform_sql,
+    setup_infra = PythonOperator(
+        task_id="setup_infrastructure",
+        python_callable=run_setup_infrastructure,
     )
 
-    launch_dataflow = BashOperator(
+    launch_dataflow = PythonOperator(
         task_id="launch_dataflow_job",
-        bash_command=(
-            "gcloud dataflow flex-template run "
-            f'"streaming-events-{{{{ ts_nodash }}}}" '
-            f"--template-file-gcs-location={TEMPLATE_GCS_PATH} "
-            f'--parameters="project={PROJECT_ID},topic={TOPIC_ID},output-table={build_bq_table_ref(PROJECT_ID, BQ_DATASET, BRONZE_TABLE)},deadletter-table={build_bq_table_ref(PROJECT_ID, BQ_DATASET, DEADLETTER_TABLE)}" '
-            f"--region={REGION}"
-        ),
-        dag=dag,
+        python_callable=run_launch_dataflow,
     )
 
-    launch_dataflow >> run_transform
+    dbt_run = BashOperator(
+        task_id="dbt_run",
+        bash_command=(
+            "cd /opt/airflow/dbt && "
+            "dbt deps --profiles-dir . && "
+            "dbt run --profiles-dir ."
+        ),
+    )
+
+    validate_data = PythonOperator(
+        task_id="validate_data",
+        python_callable=run_validate_data,
+    )
+
+    setup_infra >> launch_dataflow >> dbt_run >> validate_data

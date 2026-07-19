@@ -69,7 +69,7 @@ def publish_messages(project_id: str, topic_id: str, events_file: str, limit: in
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="data/full/eventos_full.json", help="Ruta al archivo JSON")
+    parser.add_argument("--input", default="data/eventos_ing.json", help="Ruta al archivo JSON")
     parser.add_argument("--limit", type=int, default=None, help="Límite de eventos a publicar")
     args = parser.parse_args()
 

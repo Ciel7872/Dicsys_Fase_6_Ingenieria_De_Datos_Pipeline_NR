@@ -1,0 +1,7 @@
+.venv
+.git
+__pycache__
+.pytest_cache
+*.pyc
+data/full
+tmp_check_bq.py

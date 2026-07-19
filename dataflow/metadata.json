@@ -2,10 +2,12 @@
   "name": "pubsub-to-bigquery-streaming",
   "description": "Pipeline streaming de eventos hacia BigQuery",
   "parameters": [
-    {"name": "project", "label": "Project ID", "type": "text"},
-    {"name": "topic", "label": "Topic ID", "type": "text"},
-    {"name": "subscription", "label": "Subscription ID", "type": "text"},
-    {"name": "output-table", "label": "Tabla BigQuery (output)", "type": "text"},
-    {"name": "deadletter-table", "label": "Tabla Dead Letter", "type": "text"}
-  ]
+    {"name": "project", "label": "Project ID", "type": "text", "helpText": "ID del proyecto de Google Cloud"},
+    {"name": "topic", "label": "Topic ID", "type": "text", "helpText": "ID del topic de Pub/Sub"},
+    {"name": "output-table", "label": "Tabla BigQuery (output)", "type": "text", "helpText": "Tabla de destino para registros válidos"},
+    {"name": "deadletter-table", "label": "Tabla Dead Letter", "type": "text", "helpText": "Tabla de destino para mensajes inválidos"}
+  ],
+  "defaultEnvironment": {
+    "FLEX_TEMPLATE_PYTHON_PY_FILE": "dataflow/streaming_pipeline.py"
+  }
 }

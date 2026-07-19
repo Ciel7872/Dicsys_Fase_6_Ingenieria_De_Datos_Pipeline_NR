@@ -1,0 +1,13 @@
+eventos_pipeline:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      project: dataleaguenovaretail
+      dataset: nR_core_datasets
+      threads: 4
+      keyfile: "{{ env_var('GOOGLE_APPLICATION_CREDENTIALS') }}"
+      location: us-south1
+      priority: interactive
+      retries: 1

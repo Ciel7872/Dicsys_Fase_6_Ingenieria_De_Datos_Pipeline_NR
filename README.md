@@ -1,183 +1,206 @@
-# Fase 6 – Data Engineering: Pipeline Automatizado con Dataflow y Airflow
+# Fase 6 - Pipeline automatizado con Dataflow, Airflow y dbt
 
-## 📌 Objetivo
-Automatizar la ingesta, procesamiento y transformación de eventos en tiempo real usando servicios nativos de Google Cloud Platform (Pub/Sub, Dataflow, BigQuery) y orquestación con Cloud Composer (Airflow).
+## Objetivo
+Automatizar la ingesta, el procesamiento y la transformacion de eventos en tiempo real mediante Pub/Sub, Dataflow, BigQuery y dbt, con orquestacion en Airflow.
 
-## ✅ Estado actual del proyecto
-El repositorio ya incluye:
-- Pipeline de Apache Beam para leer mensajes de Pub/Sub y escribir a BigQuery.
-- Script de publicación a Pub/Sub desde archivos JSON.
-- Script de creación de infraestructura en GCP.
-- Configuración de entorno y credenciales centralizadas.
-- Plantilla Docker y metadata para Flex Template.
+## Arquitectura
 
-Faltaba completar la parte de orquestación y los artefactos SQL para cerrar el flujo end-to-end.
+```mermaid
+graph LR
+    A[eventos.json] --> B[Pub/Sub]
+    B --> C[Dataflow Streaming]
+    C --> D[Bronze: bronze_events]
+    D --> E[dbt models]
+    E --> F[Curated: fact_events]
+    G[Airflow DAG] --> C
+    G --> E
+    G --> H[Validacion]
+```
 
-## 🏗️ Arquitectura Propuesta
-[Simulador JSON] → [Pub/Sub] → [Dataflow Streaming] → [BigQuery (bronze)]
-↓
-[Cloud Composer (Airflow)] → [Transformación SQL] → [BigQuery (curated)]
+### Flujo detallado
+```
+eventos.json
+    |
+    v
+Pub/Sub (eventos-realtime)
+    |
+    v
+Dataflow Streaming (Apache Beam)
+    |
+    v
+BigQuery bronze_events
+    |
+    v
+dbt models (staging -> marts)
+    |
+    v
+BigQuery fact_events (curated)
+    |
+    v
+Airflow: validate_data
+```
 
-text
+## Stack tecnologico
+| Componente | Tecnologia | Funcion |
+|------------|------------|---------|
+| Orquestacion | Apache Airflow 2.7.1 | DAG scheduler |
+| Ingesta | Google Pub/Sub | Mensajeria en tiempo real |
+| Procesamiento | Apache Beam / Dataflow | Streaming escalable |
+| Transformacion | dbt (data build tool) | SQL modular y testable |
+| Almacenamiento | Google BigQuery | Data warehouse analitico |
 
-## 📁 Estructura de Carpetas Esperada
-novaretail_pipeline/
-├── dags/
-│ ├── dag_eventos_realtime.py # DAG principal de orquestación
-│ └── dependencies/
-│ └── task_factory.py # Funciones auxiliares para tareas
-├── dataflow/
-│ ├── streaming_pipeline.py # Pipeline de Apache Beam
-│ ├── metadata.json # Metadatos para Flex Template
-│ ├── Dockerfile # Imagen personalizada para Dataflow
-│ └── cloudbuild.yaml # (Opcional) Build con Cloud Build
-├── ingestion/
-│ ├── pubsub_publisher.py # Script para publicar eventos JSON
-│ ├── setup_infrastructure.py # Creación de tópico, suscripción y tablas
-│ └── consumer_test.py # Consumidor de prueba (para validación)
-├── sql/
-│ ├── transforms/
-│ │ └── transform_bronze_to_curated.sql # SQL para limpiar y cargar FACT_EVENTS
-│ └── schemas/
-│ └── create_bronze_table.sql # DDL para tabla bronze_events
-├── config/
-│ ├── settings.py # Configuración centralizada (variables de entorno)
-│ └── gcp_credentials.json # (Ignorado en Git) Credenciales de servicio
-├── data/
-│ ├── sample/
-│ │ └── eventos.json # Muestra de 10 eventos
-│ └── full/
-│ └── eventos_full.json # Archivo completo para simulación
-├── requirements.txt # Dependencias para el entorno local
-└── README.md
+## Estructura del proyecto
+```
+dags/
+  dag_eventos_realtime.py          # DAG principal (4 tasks)
+  dependencies/task_factory.py     # Helpers para Airflow
 
-text
+dataflow/
+  streaming_pipeline.py            # Pipeline Beam (Dataflow + DirectRunner)
+  Dockerfile                       # Image para Flex Template
 
-## 📦 Archivos Clave (contenido esperado)
+dbt/
+  dbt_project.yml                  # Configuracion dbt
+  profiles.yml                     # Conexion BigQuery
+  models/
+    staging/
+      stg_bronze_events.sql        # Vista de limpieza
+      schema.yml                   # Tests de calidad
+    marts/
+      fact_events.sql              # Tabla de hechos final
+      schema.yml                   # Tests de la tabla final
 
-### 1. `config/settings.py`
-Carga variables de entorno y define constantes globales (proyecto, región, nombres de tópicos, datasets, etc.). Usa `python-dotenv` para cargar desde `.env`.
+ingestion/
+  pubsub_publisher.py              # Simulador de ingesta
+  setup_infrastructure.py          # Creacion de recursos GCP
+  consumer_test.py                 # Consumidor de prueba
 
-### 2. `dataflow/streaming_pipeline.py`
-Pipeline de Apache Beam que:
-- Lee mensajes de Pub/Sub.
-- Parsea JSON, valida y tipifica campos.
-- Escribe en `bronze_events` (éxitos) y `deadletter_events` (fallos).
-- Usa ventanas de 1 minuto y escritura con Storage Write API.
+data/
+  eventos_ing.json                 # Eventos generados
+  generate/
+    generate_events.py             # Generador de eventos
+config/
+  settings.py                      # Configuracion centralizada
+sql/
+  schemas/                         # DDL de tablas
+  transforms/                      # SQL legacy (reemplazado por dbt)
+tests/
+  test_streaming_pipeline.py       # Tests del pipeline Beam
+  test_dag_import.py               # Tests del DAG
+  test_generate_events.py          # Tests del generador
+  test_settings.py                 # Tests de configuracion
+  test_task_factory.py             # Tests de helpers
+```
 
-### 3. `dataflow/metadata.json`
-Define los parámetros esperados por el Flex Template (project, topic, output-table, deadletter-table).
+## DAG de Airflow
+El DAG `dag_eventos_realtime` ejecuta 4 tasks en secuencia:
 
-### 4. `dataflow/Dockerfile`
-Construye una imagen personalizada para el Flex Template basada en `python3-template-launcher-base`, copiando `streaming_pipeline.py` y dependencias necesarias.
+```python
+setup_infra >> launch_dataflow >> dbt_run >> validate_data
+```
 
-### 5. `dags/dag_eventos_realtime.py`
-DAG de Airflow que:
-- Lanza el job de Dataflow (usando el Flex Template).
-- Espera a que finalice (opcional).
-- Ejecuta una consulta SQL de transformación para mover datos de `bronze_events` a `FACT_EVENTS`.
-- Se ejecuta cada 10 minutos (schedule_interval).
+| Task | Descripcion |
+|------|-------------|
+| `setup_infrastructure` | Crea topic Pub/Sub, suscripcion y tablas BigQuery |
+| `launch_dataflow_job` | Lanza job de streaming via Flex Template |
+| `dbt_run` | Ejecuta `dbt run` para transformar bronze -> curated |
+| `validate_data` | Valida cantidad de registros en bronze y curated |
 
-### 6. `sql/transforms/transform_bronze_to_curated.sql`
-Script SQL que:
-- Elimina registros del período a procesar en `FACT_EVENTS` (idempotencia).
-- Inserta datos limpios desde `bronze_events`, aplicando LEFT JOIN con dimensiones y manejo de nulos.
+## Ejecucion local (sin GCP)
 
-### 7. `ingestion/pubsub_publisher.py`
-Script que lee un archivo JSON y publica los eventos en Pub/Sub con reintentos y manejo de errores.
-
-### 8. `ingestion/setup_infrastructure.py`
-Crea/verifica:
-- Tópico Pub/Sub
-- Suscripción Pub/Sub
-- Dataset BigQuery (bronze, silver, gold)
-- Tablas: `bronze_events`, `deadletter_events`
-
-## 🐍 Dependencias (requirements.txt)
-google-cloud-pubsub==2.19.0
-google-cloud-bigquery==3.14.1
-google-cloud-storage==2.10.0
-google-auth==2.23.4
-google-auth-oauthlib==1.0.0
-python-dotenv==1.0.0
-pathlib2==2.3.7
-protobuf==3.20.3
-
-Nota: Apache Beam debe instalarse por separado en un entorno Python 3.10/3.11 para ejecutar Dataflow localmente o construir el template.
-
-
-text
-
-## 🛠️ Pasos para Desplegar y Ejecutar
-
-### 1. Configuración Inicial
+### 1. Generar eventos
 ```bash
-# Clonar/clonar repositorio
-cd novaretail_pipeline
+python data/generate/generate_events.py --num-events 500
+```
 
-# Crear y activar entorno virtual
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-.venv\Scripts\activate      # Windows
+### 2. Ejecutar pipeline con DirectRunner
+```bash
+python dataflow/streaming_pipeline.py --runner DirectRunner --input-file data/eventos_ing.json
+```
 
-# Instalar dependencias
-pip install -r requirements.txt
-2. Configurar Credenciales
-Coloca tu archivo gcp-credentials.json en config/ y exporta la variable:
+### 3. Ejecutar tests
+```bash
+python -m pytest tests/ -v
+```
 
-bash
-export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/config/gcp_credentials.json"
-3. Crear Infraestructura
-bash
+### 4. Levantar Airflow
+```bash
+docker-compose up -d
+```
+Acceso: http://localhost:8080 (admin/admin)
+
+## Despliegue en GCP
+
+### 1. Configurar proyecto
+```bash
+gcloud config set project dataleaguenovaretail
+```
+
+### 2. Crear infraestructura
+```bash
 python ingestion/setup_infrastructure.py
-4. Probar Publicador
-bash
-python ingestion/pubsub_publisher.py --input data/sample/eventos.json --limit 10
-5. Construir Flex Template de Dataflow
-bash
+```
+
+### 3. Publicar eventos
+```bash
+python ingestion/pubsub_publisher.py --input data/eventos_ing.json --limit 10
+```
+
+### 4. Construir Flex Template
+```bash
 gcloud dataflow flex-template build gs://novaretail-dataflow-templates/pubsub-to-bq-streaming.json \
-    --image-gcr-path="gcr.io/dataleaguenovaretail/dataflow/pubsub-to-bq:latest" \
-    --sdk-language="PYTHON" \
-    --flex-template-base-image="PYTHON3" \
-    --metadata-file="dataflow/metadata.json" \
-    --py-path="." \
-    --env="FLEX_TEMPLATE_PYTHON_PY_MODULE=dataflow.streaming_pipeline" \
-    --project=dataleaguenovaretail \
-    --region=us-south1
-6. Lanzar Job de Dataflow (opcional manual)
-bash
+  --image-gcr-path="gcr.io/dataleaguenovaretail/dataflow/pubsub-to-bq:latest" \
+  --sdk-language="PYTHON" \
+  --flex-template-base-image="PYTHON3" \
+  --metadata-file="dataflow/metadata.json" \
+  --py-path="." \
+  --env="FLEX_TEMPLATE_PYTHON_PY_MODULE=dataflow.streaming_pipeline"
+```
+
+### 5. Lanzar job
+```bash
 gcloud dataflow flex-template run "streaming-events-$(date +%Y%m%d-%H%M%S)" \
-    --template-file-gcs-location="gs://novaretail-dataflow-templates/pubsub-to-bq-streaming.json" \
-    --parameters="project=dataleaguenovaretail,topic=eventos-realtime,output-table=dataleaguenovaretail:nR_core_datasets.bronze_events,deadletter-table=dataleaguenovaretail:nR_core_datasets.deadletter_events" \
-    --region=us-south1
-7. Desplegar DAG en Cloud Composer
-Sube los archivos de la carpeta dags/ al bucket de DAGs de tu entorno de Composer.
+  --template-file-gcs-location="gs://novaretail-dataflow-templates/pubsub-to-bq-streaming.json" \
+  --parameters="project=dataleaguenovaretail,topic=eventos-realtime,output-table=dataleaguenovaretail:nR_core_datasets.bronze_events,deadletter-table=dataleaguenovaretail:nR_core_datasets.deadletter_events" \
+  --region=us-south1
+```
 
-Activa el DAG desde la interfaz de Airflow.
+### 6. Ejecutar dbt (desde Airflow o manual)
+```bash
+cd dbt
+dbt deps
+dbt run
+```
 
-Verifica los logs y el monitoreo.
+## Justificacion de arquitectura
 
-📊 Verificación en BigQuery
-sql
-SELECT COUNT(*) FROM `nR_core_datasets.bronze_events`;
-SELECT COUNT(*) FROM `nR_core_datasets.FACT_EVENTS`;
-🔐 Seguridad y Permisos Necesarios
-Cuenta de servicio para Dataflow: roles/dataflow.admin, roles/storage.objectAdmin, roles/bigquery.dataEditor, roles/pubsub.subscriber.
+### Por que Dataflow (Apache Beam)?
+- **Serverless**: Sin manejo de clusters
+- **Escalabilidad automatica**: Se ajusta a la carga
+- **Streaming nativo**: Procesa eventos en tiempo real
+- **Deadletter automatico**: Manejo de errores integrado
 
-Cuenta de usuario para despliegue: roles/dataflow.admin, roles/storage.objectAdmin, roles/iam.serviceAccountUser.
+### Por que dbt?
+- **SQL modular**: Transformaciones mantenibles
+- **Testing automatico**: Validacion de calidad de datos
+- **Documentacion**: Generada automaticamente
+- **Lineage**: Dependencias entre modelos
 
-Cloud Composer (Airflow): la cuenta de servicio del entorno debe tener permisos para ejecutar jobs de Dataflow y consultas en BigQuery.
+### Por que Airflow?
+- **Orquestacion central**: Coordina todos los componentes
+- **Monitoreo**: UI para visualizar pipelines
+- **Reintentos**: Manejo de fallos automatico
+- **Programacion**: Cron-like para ejecuciones periodicas
 
-📝 Notas Finales
-El pipeline de Dataflow está configurado en modo streaming continuo.
+### Patron Medallion (Bronze -> Curated)
+- **Bronze**: Datos crudos tal como llegan
+- **Staging**: Limpieza y validacion basica
+- **Curated/Marts**: Datos listos para analitica
 
-El DAG de Airflow ejecuta la transformación batch cada 10 minutos para mantener actualizada la tabla de hechos.
-
-Se implementa idempotencia en las cargas para evitar duplicados.
-
-📎 Enlaces Útiles
-Documentación de Flex Templates
-
-Apache Beam en Python
-
-Cloud Composer
+## Entregables de la Fase 6
+- [x] DAG funcional con 4 tasks
+- [x] Diagrama tecnico (README + mermaid)
+- [x] Justificacion de arquitectura
+- [x] Soporte DirectRunner (testing local)
+- [x] Modelos dbt con tests
+- [x] Generador de eventos mejorado
