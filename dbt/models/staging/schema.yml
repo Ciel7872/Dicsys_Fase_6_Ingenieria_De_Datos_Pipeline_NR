@@ -7,7 +7,6 @@ models:
       - name: event_id
         description: "ID unico del evento"
         tests:
-          - unique
           - not_null
       - name: date_id
         description: "Fecha del evento en formato YYYYMMDD"
@@ -32,7 +31,7 @@ models:
 sources:
   - name: bronze
     database: dataleaguenovaretail
-    schema: nR_core_datasets
+    schema: nR_bronze
     tables:
       - name: bronze_events
         description: "Tabla bronze de eventos en tiempo real"

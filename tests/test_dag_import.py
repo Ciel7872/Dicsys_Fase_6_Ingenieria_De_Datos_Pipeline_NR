@@ -17,6 +17,7 @@ class DagImportTests(unittest.TestCase):
             "setup_infrastructure",
             "launch_dataflow_job",
             "dbt_run",
+            "dbt_test",
             "validate_data",
         ]
         for task in required_tasks:
@@ -31,6 +32,11 @@ class DagImportTests(unittest.TestCase):
         dag_path = Path(__file__).resolve().parents[1] / "dags" / "dag_eventos_realtime.py"
         content = dag_path.read_text(encoding="utf-8")
         self.assertIn("dbt run", content, "dbt run command not found")
+
+    def test_dag_has_dbt_test_command(self):
+        dag_path = Path(__file__).resolve().parents[1] / "dags" / "dag_eventos_realtime.py"
+        content = dag_path.read_text(encoding="utf-8")
+        self.assertIn("dbt test", content, "dbt test command not found")
 
 
 if __name__ == "__main__":

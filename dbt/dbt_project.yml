@@ -19,5 +19,7 @@ models:
   eventos_pipeline:
     staging:
       +materialized: view
+      +schema: silver
     marts:
       +materialized: table
+      +schema: gold

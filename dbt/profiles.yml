@@ -5,7 +5,7 @@ eventos_pipeline:
       type: bigquery
       method: service-account
       project: dataleaguenovaretail
-      dataset: nR_core_datasets
+      dataset: nR
       threads: 4
       keyfile: "{{ env_var('GOOGLE_APPLICATION_CREDENTIALS') }}"
       location: us-south1

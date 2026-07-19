@@ -1,41 +1,46 @@
 # Fase 6 - Pipeline automatizado con BigQuery, Airflow y dbt
 
 ## Objetivo
-Automatizar la ingesta, el procesamiento y la transformacion de eventos en tiempo real mediante un pipeline medallion (bronze -> curated) con orquestacion en Airflow, transformaciones en dbt y almacenamiento en BigQuery.
+Automatizar la ingesta, el procesamiento y la transformacion de eventos en tiempo real mediante un pipeline medallion (bronze -> silver -> gold) con orquestacion en Airflow, transformaciones en dbt y almacenamiento en BigQuery.
 
 ## Arquitectura
 
-```mermaid
-graph LR
-    A[eventos.json] --> B[Bronze: bronze_events]
-    B --> C[dbt staging]
-    C --> D[dbt marts]
-    D --> E[Curated: fact_events]
-    F[Airflow DAG] --> B
-    F --> C
-    F --> D
-    F --> G[dbt tests]
-    G --> H[Validacion]
+```
+                         CAPAS MEDALLION
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  BRONZE (nR_bronze)                                     │
+  │  ├── bronze_events     ← datos crudos, duplicados OK   │
+  │  └── deadletter_events ← mensajes con error             │
+  ├─────────────────────────────────────────────────────────┤
+  │  SILVER (nR_silver)                                     │
+  │  └── stg_bronze_events ← view, limpieza basica         │
+  ├─────────────────────────────────────────────────────────┤
+  │  GOLD (nR_gold)                                         │
+  │  └── fact_events       ← table, deduplicada + enriched │
+  └─────────────────────────────────────────────────────────┘
+
+  Flujo: JSON batches → Bronze → Silver (dbt) → Gold (dbt)
 ```
 
 ### Flujo detallado
 ```
-eventos.json (500 eventos generados)
-    |
-    v
-BigQuery bronze_events (ingesta raw)
-    |
-    v
-dbt: stg_bronze_events (limpieza + validacion)
-    |
-    v
-dbt: fact_events (tabla curada)
-    |
-    v
-dbt test (quality checks)
-    |
-    v
-Validacion de registros
+data/batches/batch_XX.json (10 archivos, 50 eventos c/u)
+    │
+    ▼
+BigQuery nR_bronze.bronze_events (ingesta raw)
+    │
+    ▼
+dbt: nR_silver.stg_bronze_events (view - limpieza + filtros)
+    │
+    ▼
+dbt: nR_gold.fact_events (table - deduplicada con ROW_NUMBER)
+    │
+    ▼
+dbt test (11 quality checks)
+    │
+    ▼
+Validacion de registros (bronze, silver, gold)
 ```
 
 ## Stack tecnologico
@@ -57,33 +62,37 @@ Validacion de registros
 ```
 dags/
   dag_eventos_realtime.py          # DAG principal (5 tasks)
-  dependencies/task_factory.py     # Helpers para Airflow
+  dependencies/
+    __init__.py
+    task_factory.py                # Helpers para Airflow
 
 dataflow/
   streaming_pipeline.py            # Pipeline Beam (Dataflow + DirectRunner)
 
 dbt/
   dbt_project.yml                  # Configuracion dbt
-  profiles.yml                     # Conexion BigQuery
+  profiles.yml                     # Conexion BigQuery (dataset: nR)
   models/
     staging/
       stg_bronze_events.sql        # Vista de limpieza
-      schema.yml                   # Tests de calidad
+      schema.yml                   # Tests de calidad (11 tests)
     marts/
-      fact_events.sql              # Tabla de hechos final
+      fact_events.sql              # Tabla deduplicada
       schema.yml                   # Tests de la tabla final
 
 ingestion/
   pubsub_publisher.py              # Simulador de ingesta Pub/Sub
-  setup_infrastructure.py          # Creacion de recursos GCP
+  setup_infrastructure.py          # Creacion de datasets y tablas GCP
 
 data/
-  eventos_ing.json                 # 500 eventos generados
+  batches/                         # 10 archivos batch (50 eventos c/u)
+    batch_01.json ... batch_10.json
   generate/
     generate_events.py             # Generador CLI con seed
 
 config/
   settings.py                      # Configuracion centralizada
+
 tests/
   test_streaming_pipeline.py       # Tests del pipeline Beam
   test_dag_import.py               # Tests de estructura del DAG
@@ -95,29 +104,39 @@ tests/
 ## DAG de Airflow
 El DAG `dag_eventos_realtime` ejecuta 5 tasks en secuencia:
 
-```python
+```
 setup_infra >> launch_dataflow >> dbt_run >> dbt_test >> validate_data
 ```
 
-| Task | Tipo | Descripcion |
-|------|------|-------------|
-| `setup_infrastructure` | PythonOperator | Crea topic Pub/Sub, suscripcion y tablas BigQuery |
-| `launch_dataflow_job` | PythonOperator | Lee eventos JSON y los escribe a BigQuery |
-| `dbt_run` | BashOperator | Ejecuta `dbt run` para transformar bronze -> curated |
-| `dbt_test` | BashOperator | Ejecuta `dbt test` para validar calidad de datos |
-| `validate_data` | PythonOperator | Valida cantidad de registros en bronze y curated |
+| # | Task | Tipo | Descripcion |
+|---|------|------|-------------|
+| 1 | `setup_infrastructure` | PythonOperator | Crea 3 datasets (bronze, silver, gold) y tablas en BigQuery |
+| 2 | `launch_dataflow_job` | PythonOperator | Lee batch rotativo de JSON y lo inserta en bronze_events |
+| 3 | `dbt_run` | BashOperator | Ejecuta dbt run: crea view en silver, table en gold |
+| 4 | `dbt_test` | BashOperator | Ejecuta 11 dbt tests de calidad de datos |
+| 5 | `validate_data` | PythonOperator | Cuenta registros en las 3 capas y valida |
 
 ### Schedule
 - Frecuencia: cada 10 minutos (`*/10 * * * *`)
 - catchup: desactivado (no ejecuta rangos atrasados)
 - Retries: 2 por task, delay de 2 minutos
+- Batch rotation: rota entre batch_01 a batch_10 cada 10 minutos
 
-### Tests de dbt
+### Tests de dbt (11 tests)
 Los tests verifican automaticamente en cada ejecucion:
-- **Unicidad** de `event_id` en bronze y curated
-- **No nulidad** en campos criticos (`event_id`, `date_id`, `ingestion_time`)
-- **Valores aceptados** en `event_type` (login, view, add_to_cart, checkout, purchase, cart_abandoned)
-- **No nulidad** de `transformed_at` en fact_events
+
+**Silver (staging):**
+- `event_id`: not_null
+- `date_id`: not_null
+- `event_type`: accepted_values (login, view, add_to_cart, checkout, purchase, cart_abandoned)
+- `ingestion_time`: not_null
+
+**Gold (fact_events):**
+- `event_id`: unique + not_null
+- `date_id`: not_null
+- `event_type`: not_null + accepted_values
+- `ingestion_time`: not_null
+- `transformed_at`: not_null
 
 ## Ejecucion local
 
@@ -133,7 +152,7 @@ python dataflow/streaming_pipeline.py --runner DirectRunner --input-file data/ev
 
 ### 3. Ejecutar tests
 ```bash
-python -m pytest tests/ -v
+pytest tests/ -v
 ```
 
 ### 4. Levantar Airflow
@@ -147,16 +166,16 @@ Acceso: http://localhost:8080 (admin/admin)
 docker-compose down
 ```
 
-
 ### Credenciales GCP
 El archivo `config/gcp_credentials.json` contiene la service account de GCP.
+**Nunca subir este archivo a git.**
 
 ## Justificacion de arquitectura
 
-### Patron Medallion (Bronze -> Curated)
-- **Bronze**: Datos crudos tal como llegan del generador/ingesta
-- **Staging**: Limpieza, tipado y validacion basica (dbt)
-- **Marts**: Datos transformados y listos para analitica
+### Patron Medallion (Bronze -> Silver -> Gold)
+- **Bronze** (`nR_bronze`): Datos crudos tal como llegan del generador. Duplicados permitidos (eventos reinsertados en cada ciclo).
+- **Silver** (`nR_silver`): Vista de limpieza. Filtra nulos, tipa campos. Sin deduplicacion (refleja la realidad del stream).
+- **Gold** (`nR_gold`): Tabla deduplicada con `ROW_NUMBER()` sobre `event_id`. Lista para consumo analitico.
 
 ### Por que dbt?
 - **SQL modular**: Transformaciones mantenibles y versionables
@@ -174,4 +193,3 @@ El archivo `config/gcp_credentials.json` contiene la service account de GCP.
 - **Serverless**: Sin gestion de infraestructura
 - **Free tier**: 1 TB de queries y 10 GB de almacenamiento gratis al mes
 - **Integracion nativa**: Conectores oficiales de Python y dbt
-

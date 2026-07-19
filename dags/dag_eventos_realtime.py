@@ -1,7 +1,7 @@
 """DAG de Airflow para orquestar el pipeline de eventos en tiempo real.
 
 Flujo:
-  setup_infra >> launch_dataflow >> dbt_run >> validate_data
+  setup_infra >> launch_dataflow >> dbt_run >> dbt_test >> validate_data
 """
 from __future__ import annotations
 
@@ -26,9 +26,12 @@ from dependencies.task_factory import (
 PROJECT_ID = get_airflow_env_var("GCP_PROJECT_ID", "dataleaguenovaretail")
 REGION = get_airflow_env_var("GCP_REGION", "us-south1")
 TOPIC_ID = get_airflow_env_var("PUBSUB_TOPIC", "eventos-realtime")
-BQ_DATASET = get_airflow_env_var("BQ_DATASET", "nR_core_datasets")
+BQ_BRONZE_DATASET = get_airflow_env_var("BQ_BRONZE_DATASET", "nR_bronze")
+BQ_SILVER_DATASET = get_airflow_env_var("BQ_SILVER_DATASET", "nR_silver")
+BQ_GOLD_DATASET = get_airflow_env_var("BQ_GOLD_DATASET", "nR_gold")
 BRONZE_TABLE = get_airflow_env_var("BQ_BRONZE_TABLE", "bronze_events")
 DEADLETTER_TABLE = get_airflow_env_var("BQ_DEADLETTER_TABLE", "deadletter_events")
+GOLD_TABLE = get_airflow_env_var("BQ_GOLD_TABLE", "fact_events")
 
 DEFAULT_ARGS = {
     "owner": "data-engineering",
@@ -57,29 +60,41 @@ def run_setup_infrastructure() -> None:
 
     create_pubsub_topic(PROJECT_ID, TOPIC_ID)
     create_pubsub_subscription(PROJECT_ID, TOPIC_ID, f"{TOPIC_ID}-sub")
-    create_bigquery_dataset(PROJECT_ID, BQ_DATASET, REGION)
+
+    create_bigquery_dataset(PROJECT_ID, BQ_BRONZE_DATASET, REGION)
+    create_bigquery_dataset(PROJECT_ID, BQ_SILVER_DATASET, REGION)
+    create_bigquery_dataset(PROJECT_ID, BQ_GOLD_DATASET, REGION)
+
     create_bigquery_table(
-        PROJECT_ID, BQ_DATASET, BRONZE_TABLE, BRONZE_SCHEMA,
+        PROJECT_ID, BQ_BRONZE_DATASET, BRONZE_TABLE, BRONZE_SCHEMA,
         partition_field="ingestion_time",
         clustering_fields=["event_type", "customer_id"],
     )
     create_bigquery_table(
-        PROJECT_ID, BQ_DATASET, DEADLETTER_TABLE, DEADLETTER_SCHEMA,
+        PROJECT_ID, BQ_BRONZE_DATASET, DEADLETTER_TABLE, DEADLETTER_SCHEMA,
         partition_field="ingestion_time",
     )
 
 
 def run_launch_dataflow():
-    """Lee eventos del JSON local y los escribe directamente a BigQuery."""
+    """Lee un batch rotativo de eventos y lo escribe a BigQuery."""
     from google.cloud import bigquery
     sys.path.insert(0, str(ROOT_DIR))
-    from config.settings import get_credentials, resolve_credentials_path
+    from config.settings import get_credentials
     from datetime import datetime
     import json
 
-    input_file = ROOT_DIR / "data" / "eventos_ing.json"
-    if not input_file.exists():
-        raise FileNotFoundError(f"No se encontro {input_file}. Ejecute generate_events.py primero.")
+    batches_dir = ROOT_DIR / "data" / "batches"
+    if not batches_dir.exists():
+        raise FileNotFoundError(f"No se encontro {batches_dir}. Ejecute generate_events.py primero.")
+
+    batch_files = sorted(batches_dir.glob("batch_*.json"))
+    if not batch_files:
+        raise FileNotFoundError("No se encontraron archivos batch en data/batches/")
+
+    batch_num = (datetime.utcnow().minute // 10) % len(batch_files) + 1
+    input_file = batches_dir / f"batch_{batch_num:02d}.json"
+    print(f"Processing batch {batch_num}/{len(batch_files)}: {input_file.name}")
 
     with open(input_file, "r", encoding="utf-8") as f:
         raw_events = json.load(f)
@@ -104,12 +119,12 @@ def run_launch_dataflow():
             "ingestion_time": datetime.utcnow().isoformat() + "Z",
         })
 
-    table_id = f"{PROJECT_ID}.{BQ_DATASET}.{BRONZE_TABLE}"
+    table_id = f"{PROJECT_ID}.{BQ_BRONZE_DATASET}.{BRONZE_TABLE}"
     client = bigquery.Client(project=PROJECT_ID, credentials=get_credentials())
     errors = client.insert_rows_json(table_id, rows)
     if errors:
         raise RuntimeError(f"BigQuery insert errors: {errors}")
-    print(f"Inserted {len(rows)} rows into {table_id}")
+    print(f"Inserted {len(rows)} rows from {input_file.name} into {table_id}")
 
 
 def run_validate_data() -> None:
@@ -120,14 +135,20 @@ def run_validate_data() -> None:
 
     client = bigquery.Client(project=PROJECT_ID, credentials=get_credentials())
     results = {}
-    for table in [BRONZE_TABLE, "fact_events"]:
-        query = f"SELECT COUNT(*) AS total FROM `{PROJECT_ID}.{BQ_DATASET}.{table}`"
+
+    for table, dataset in [
+        (BRONZE_TABLE, BQ_BRONZE_DATASET),
+        ("stg_bronze_events", BQ_SILVER_DATASET),
+        (GOLD_TABLE, BQ_GOLD_DATASET),
+    ]:
+        query = f"SELECT COUNT(*) AS total FROM `{PROJECT_ID}.{dataset}.{table}`"
         rows = list(client.query(query))
         count = rows[0].total
-        results[table] = count
-        print(f"{table}: {count} registros")
+        results[f"{dataset}.{table}"] = count
+        print(f"{dataset}.{table}: {count} registros")
 
-    if results.get(BRONZE_TABLE, 0) == 0:
+    bronze_count = results.get(f"{BQ_BRONZE_DATASET}.{BRONZE_TABLE}", 0)
+    if bronze_count == 0:
         raise ValueError("No hay datos en bronze_events - verifique la ingesta")
     print(f"Validacion OK: {json.dumps(results)}")
 
@@ -159,9 +180,17 @@ with DAG(
         ),
     )
 
+    dbt_test = BashOperator(
+        task_id="dbt_test",
+        bash_command=(
+            "cd /opt/airflow/dbt && "
+            "dbt test --profiles-dir ."
+        ),
+    )
+
     validate_data = PythonOperator(
         task_id="validate_data",
         python_callable=run_validate_data,
     )
 
-    setup_infra >> launch_dataflow >> dbt_run >> validate_data
+    setup_infra >> launch_dataflow >> dbt_run >> dbt_test >> validate_data

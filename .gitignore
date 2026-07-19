@@ -11,13 +11,28 @@ venv/
 env/
 
 # Archivos de entorno
-config/variables.env
 .env
 
-# Logs y cachés
+# Logs y caches
 *.log
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# dbt artifacts
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
+# Data legacy (reemplazado por data/batches/)
+data/eventos_ing.json
+data/eventos.json
+
+# Archivos temporales
+tmp_*.py
 estructura.txt
-falta.txt
+importante.txt
+
+
+deploy_gcp.ps1
+sql/

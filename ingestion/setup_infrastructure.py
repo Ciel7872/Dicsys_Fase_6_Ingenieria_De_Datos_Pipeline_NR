@@ -14,7 +14,9 @@ from config.settings import (
     REGION,
     TOPIC_ID,
     SUBSCRIPTION_ID,
-    BQ_DATASET,
+    BQ_BRONZE_DATASET,
+    BQ_SILVER_DATASET,
+    BQ_GOLD_DATASET,
     BRONZE_TABLE,
     DEADLETTER_TABLE,
     get_credentials,
@@ -26,19 +28,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BRONZE_SCHEMA = [
-    {"name": "event_id", "type": "INTEGER", "mode": "REQUIRED"},
-    {"name": "date_id", "type": "INTEGER", "mode": "REQUIRED"},
-    {"name": "customer_id", "type": "INTEGER", "mode": "NULLABLE"},
-    {"name": "product_id", "type": "INTEGER", "mode": "NULLABLE"},
-    {"name": "session_id", "type": "STRING", "mode": "NULLABLE"},
-    {"name": "event_type", "type": "STRING", "mode": "NULLABLE"},
-    {"name": "ingestion_time", "type": "TIMESTAMP", "mode": "REQUIRED"},
+    {"name": "event_id", "field_type": "INTEGER", "mode": "REQUIRED"},
+    {"name": "date_id", "field_type": "INTEGER", "mode": "REQUIRED"},
+    {"name": "customer_id", "field_type": "INTEGER", "mode": "NULLABLE"},
+    {"name": "product_id", "field_type": "INTEGER", "mode": "NULLABLE"},
+    {"name": "session_id", "field_type": "STRING", "mode": "NULLABLE"},
+    {"name": "event_type", "field_type": "STRING", "mode": "NULLABLE"},
+    {"name": "ingestion_time", "field_type": "TIMESTAMP", "mode": "REQUIRED"},
 ]
 
 DEADLETTER_SCHEMA = [
-    {"name": "raw_message", "type": "STRING", "mode": "REQUIRED"},
-    {"name": "error", "type": "STRING", "mode": "REQUIRED"},
-    {"name": "ingestion_time", "type": "TIMESTAMP", "mode": "REQUIRED"},
+    {"name": "raw_message", "field_type": "STRING", "mode": "REQUIRED"},
+    {"name": "error", "field_type": "STRING", "mode": "REQUIRED"},
+    {"name": "ingestion_time", "field_type": "TIMESTAMP", "mode": "REQUIRED"},
 ]
 
 def create_pubsub_topic(project_id: str, topic_id: str) -> None:
@@ -126,16 +128,20 @@ if __name__ == "__main__":
     logger.info("Iniciando configuracion de infraestructura...")
 
     create_pubsub_topic(PROJECT_ID, TOPIC_ID)
-    create_pubsub_subscription(PROJECT_ID, TOPIC_ID, SUBSCRIPTION_ID)
-    create_bigquery_dataset(PROJECT_ID, BQ_DATASET, REGION)
+    create_pubsub_subscription(PROJECT_ID, TOPIC_ID, f"{TOPIC_ID}-sub")
+
+    create_bigquery_dataset(PROJECT_ID, BQ_BRONZE_DATASET, REGION)
     create_bigquery_table(
-        PROJECT_ID, BQ_DATASET, BRONZE_TABLE, BRONZE_SCHEMA,
+        PROJECT_ID, BQ_BRONZE_DATASET, BRONZE_TABLE, BRONZE_SCHEMA,
         partition_field="ingestion_time",
-        clustering_fields=["event_type", "customer_id"]
+        clustering_fields=["event_type", "customer_id"],
     )
     create_bigquery_table(
-        PROJECT_ID, BQ_DATASET, DEADLETTER_TABLE, DEADLETTER_SCHEMA,
+        PROJECT_ID, BQ_BRONZE_DATASET, DEADLETTER_TABLE, DEADLETTER_SCHEMA,
         partition_field="ingestion_time",
     )
+
+    create_bigquery_dataset(PROJECT_ID, BQ_SILVER_DATASET, REGION)
+    create_bigquery_dataset(PROJECT_ID, BQ_GOLD_DATASET, REGION)
 
     logger.info("Infraestructura lista.")

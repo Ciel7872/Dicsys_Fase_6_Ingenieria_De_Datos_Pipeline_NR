@@ -19,7 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config.settings import (
     PROJECT_ID,
     TOPIC_ID,
-    BQ_DATASET,
+    BQ_BRONZE_DATASET,
     BRONZE_TABLE,
     DEADLETTER_TABLE,
     REGION,
@@ -109,8 +109,8 @@ def run(
     num_workers: int = 2,
     max_num_workers: int = 5,
 ):
-    output_table = output_table or f"{project_id}:{BQ_DATASET}.{BRONZE_TABLE}"
-    deadletter_table = deadletter_table or f"{project_id}:{BQ_DATASET}.{DEADLETTER_TABLE}"
+    output_table = output_table or f"{project_id}:{BQ_BRONZE_DATASET}.{BRONZE_TABLE}"
+    deadletter_table = deadletter_table or f"{project_id}:{BQ_BRONZE_DATASET}.{DEADLETTER_TABLE}"
     staging_bucket = staging_bucket or STAGING_BUCKET
     temp_bucket = temp_bucket or TEMP_BUCKET
 

@@ -25,10 +25,14 @@ REGION = os.getenv("GCP_REGION", "us-south1")
 TOPIC_ID = os.getenv("PUBSUB_TOPIC", "eventos-realtime")
 SUBSCRIPTION_ID = os.getenv("PUBSUB_SUBSCRIPTION", "eventos-realtime-sub")
 
-# BigQuery
-BQ_DATASET = os.getenv("BQ_DATASET", "nR_core_datasets")
+# BigQuery - Capas Medallion
+BQ_BRONZE_DATASET = os.getenv("BQ_BRONZE_DATASET", "nR_bronze")
+BQ_SILVER_DATASET = os.getenv("BQ_SILVER_DATASET", "nR_silver")
+BQ_GOLD_DATASET = os.getenv("BQ_GOLD_DATASET", "nR_gold")
 BRONZE_TABLE = os.getenv("BQ_BRONZE_TABLE", "bronze_events")
 DEADLETTER_TABLE = os.getenv("BQ_DEADLETTER_TABLE", "deadletter_events")
+SILVER_TABLE = os.getenv("BQ_SILVER_TABLE", "stg_bronze_events")
+GOLD_TABLE = os.getenv("BQ_GOLD_TABLE", "fact_events")
 
 # Rutas de credenciales
 CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "config/gcp_credentials.json")
