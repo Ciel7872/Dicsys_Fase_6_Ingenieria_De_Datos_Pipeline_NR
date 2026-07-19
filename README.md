@@ -10,14 +10,14 @@ Automatizar la ingesta, el procesamiento y la transformacion de eventos en tiemp
 
   ┌─────────────────────────────────────────────────────────┐
   │  BRONZE (nR_bronze)                                     │
-  │  ├── bronze_events     ← datos crudos, duplicados OK   │
+  │  ├── bronze_events     ← datos crudos, duplicados OK    │
   │  └── deadletter_events ← mensajes con error             │
   ├─────────────────────────────────────────────────────────┤
   │  SILVER (nR_silver)                                     │
-  │  └── stg_bronze_events ← view, limpieza basica         │
+  │  └── stg_bronze_events ← view, limpieza basica          │
   ├─────────────────────────────────────────────────────────┤
   │  GOLD (nR_gold)                                         │
-  │  └── fact_events       ← table, deduplicada + enriched │
+  │  └── fact_events       ← table, deduplicada + enriched  │
   └─────────────────────────────────────────────────────────┘
 
   Flujo: JSON batches → Bronze → Silver (dbt) → Gold (dbt)

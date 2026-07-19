@@ -33,6 +33,7 @@ tmp_*.py
 estructura.txt
 importante.txt
 
+#NOSEUSA 
 
 deploy_gcp.ps1
 sql/
