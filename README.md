@@ -1,63 +1,66 @@
-# Fase 6 - Pipeline automatizado con Dataflow, Airflow y dbt
+# Fase 6 - Pipeline automatizado con BigQuery, Airflow y dbt
 
 ## Objetivo
-Automatizar la ingesta, el procesamiento y la transformacion de eventos en tiempo real mediante Pub/Sub, Dataflow, BigQuery y dbt, con orquestacion en Airflow.
+Automatizar la ingesta, el procesamiento y la transformacion de eventos en tiempo real mediante un pipeline medallion (bronze -> curated) con orquestacion en Airflow, transformaciones en dbt y almacenamiento en BigQuery.
 
 ## Arquitectura
 
 ```mermaid
 graph LR
-    A[eventos.json] --> B[Pub/Sub]
-    B --> C[Dataflow Streaming]
-    C --> D[Bronze: bronze_events]
-    D --> E[dbt models]
-    E --> F[Curated: fact_events]
-    G[Airflow DAG] --> C
-    G --> E
+    A[eventos.json] --> B[Bronze: bronze_events]
+    B --> C[dbt staging]
+    C --> D[dbt marts]
+    D --> E[Curated: fact_events]
+    F[Airflow DAG] --> B
+    F --> C
+    F --> D
+    F --> G[dbt tests]
     G --> H[Validacion]
 ```
 
 ### Flujo detallado
 ```
-eventos.json
+eventos.json (500 eventos generados)
     |
     v
-Pub/Sub (eventos-realtime)
+BigQuery bronze_events (ingesta raw)
     |
     v
-Dataflow Streaming (Apache Beam)
+dbt: stg_bronze_events (limpieza + validacion)
     |
     v
-BigQuery bronze_events
+dbt: fact_events (tabla curada)
     |
     v
-dbt models (staging -> marts)
+dbt test (quality checks)
     |
     v
-BigQuery fact_events (curated)
-    |
-    v
-Airflow: validate_data
+Validacion de registros
 ```
 
 ## Stack tecnologico
 | Componente | Tecnologia | Funcion |
 |------------|------------|---------|
-| Orquestacion | Apache Airflow 2.7.1 | DAG scheduler |
-| Ingesta | Google Pub/Sub | Mensajeria en tiempo real |
-| Procesamiento | Apache Beam / Dataflow | Streaming escalable |
-| Transformacion | dbt (data build tool) | SQL modular y testable |
+| Orquestacion | Apache Airflow 2.7.1 | DAG scheduler (Docker) |
+| Transformacion | dbt 1.12.0 | SQL modular y testable |
 | Almacenamiento | Google BigQuery | Data warehouse analitico |
+| Ingesta | Google Cloud Python Client | Carga directa a BigQuery |
+| Testing | pytest + dbt tests | Validacion end-to-end |
+
+### Stack local (testing)
+| Componente | Tecnologia | Funcion |
+|------------|------------|---------|
+| Pipeline | Apache Beam 2.75.0 | Procesamiento DirectRunner |
+| Generador | Python CLI | Generacion de eventos |
 
 ## Estructura del proyecto
 ```
 dags/
-  dag_eventos_realtime.py          # DAG principal (4 tasks)
+  dag_eventos_realtime.py          # DAG principal (5 tasks)
   dependencies/task_factory.py     # Helpers para Airflow
 
 dataflow/
   streaming_pipeline.py            # Pipeline Beam (Dataflow + DirectRunner)
-  Dockerfile                       # Image para Flex Template
 
 dbt/
   dbt_project.yml                  # Configuracion dbt
@@ -71,46 +74,56 @@ dbt/
       schema.yml                   # Tests de la tabla final
 
 ingestion/
-  pubsub_publisher.py              # Simulador de ingesta
+  pubsub_publisher.py              # Simulador de ingesta Pub/Sub
   setup_infrastructure.py          # Creacion de recursos GCP
-  consumer_test.py                 # Consumidor de prueba
 
 data/
-  eventos_ing.json                 # Eventos generados
+  eventos_ing.json                 # 500 eventos generados
   generate/
-    generate_events.py             # Generador de eventos
+    generate_events.py             # Generador CLI con seed
+
 config/
   settings.py                      # Configuracion centralizada
-sql/
-  schemas/                         # DDL de tablas
-  transforms/                      # SQL legacy (reemplazado por dbt)
 tests/
   test_streaming_pipeline.py       # Tests del pipeline Beam
-  test_dag_import.py               # Tests del DAG
+  test_dag_import.py               # Tests de estructura del DAG
   test_generate_events.py          # Tests del generador
   test_settings.py                 # Tests de configuracion
   test_task_factory.py             # Tests de helpers
 ```
 
 ## DAG de Airflow
-El DAG `dag_eventos_realtime` ejecuta 4 tasks en secuencia:
+El DAG `dag_eventos_realtime` ejecuta 5 tasks en secuencia:
 
 ```python
-setup_infra >> launch_dataflow >> dbt_run >> validate_data
+setup_infra >> launch_dataflow >> dbt_run >> dbt_test >> validate_data
 ```
 
-| Task | Descripcion |
-|------|-------------|
-| `setup_infrastructure` | Crea topic Pub/Sub, suscripcion y tablas BigQuery |
-| `launch_dataflow_job` | Lanza job de streaming via Flex Template |
-| `dbt_run` | Ejecuta `dbt run` para transformar bronze -> curated |
-| `validate_data` | Valida cantidad de registros en bronze y curated |
+| Task | Tipo | Descripcion |
+|------|------|-------------|
+| `setup_infrastructure` | PythonOperator | Crea topic Pub/Sub, suscripcion y tablas BigQuery |
+| `launch_dataflow_job` | PythonOperator | Lee eventos JSON y los escribe a BigQuery |
+| `dbt_run` | BashOperator | Ejecuta `dbt run` para transformar bronze -> curated |
+| `dbt_test` | BashOperator | Ejecuta `dbt test` para validar calidad de datos |
+| `validate_data` | PythonOperator | Valida cantidad de registros en bronze y curated |
 
-## Ejecucion local (sin GCP)
+### Schedule
+- Frecuencia: cada 10 minutos (`*/10 * * * *`)
+- catchup: desactivado (no ejecuta rangos atrasados)
+- Retries: 2 por task, delay de 2 minutos
+
+### Tests de dbt
+Los tests verifican automaticamente en cada ejecucion:
+- **Unicidad** de `event_id` en bronze y curated
+- **No nulidad** en campos criticos (`event_id`, `date_id`, `ingestion_time`)
+- **Valores aceptados** en `event_type` (login, view, add_to_cart, checkout, purchase, cart_abandoned)
+- **No nulidad** de `transformed_at` en fact_events
+
+## Ejecucion local
 
 ### 1. Generar eventos
 ```bash
-python data/generate/generate_events.py --num-events 500
+python data/generate/generate_events.py --num-events 500 --seed 42
 ```
 
 ### 2. Ejecutar pipeline con DirectRunner
@@ -125,82 +138,40 @@ python -m pytest tests/ -v
 
 ### 4. Levantar Airflow
 ```bash
-docker-compose up -d
+docker-compose up --build -d
 ```
 Acceso: http://localhost:8080 (admin/admin)
 
-## Despliegue en GCP
-
-### 1. Configurar proyecto
+### 5. Parar Airflow
 ```bash
-gcloud config set project dataleaguenovaretail
+docker-compose down
 ```
 
-### 2. Crear infraestructura
-```bash
-python ingestion/setup_infrastructure.py
-```
 
-### 3. Publicar eventos
-```bash
-python ingestion/pubsub_publisher.py --input data/eventos_ing.json --limit 10
-```
-
-### 4. Construir Flex Template
-```bash
-gcloud dataflow flex-template build gs://novaretail-dataflow-templates/pubsub-to-bq-streaming.json \
-  --image-gcr-path="gcr.io/dataleaguenovaretail/dataflow/pubsub-to-bq:latest" \
-  --sdk-language="PYTHON" \
-  --flex-template-base-image="PYTHON3" \
-  --metadata-file="dataflow/metadata.json" \
-  --py-path="." \
-  --env="FLEX_TEMPLATE_PYTHON_PY_MODULE=dataflow.streaming_pipeline"
-```
-
-### 5. Lanzar job
-```bash
-gcloud dataflow flex-template run "streaming-events-$(date +%Y%m%d-%H%M%S)" \
-  --template-file-gcs-location="gs://novaretail-dataflow-templates/pubsub-to-bq-streaming.json" \
-  --parameters="project=dataleaguenovaretail,topic=eventos-realtime,output-table=dataleaguenovaretail:nR_core_datasets.bronze_events,deadletter-table=dataleaguenovaretail:nR_core_datasets.deadletter_events" \
-  --region=us-south1
-```
-
-### 6. Ejecutar dbt (desde Airflow o manual)
-```bash
-cd dbt
-dbt deps
-dbt run
-```
+### Credenciales GCP
+El archivo `config/gcp_credentials.json` contiene la service account de GCP.
 
 ## Justificacion de arquitectura
 
-### Por que Dataflow (Apache Beam)?
-- **Serverless**: Sin manejo de clusters
-- **Escalabilidad automatica**: Se ajusta a la carga
-- **Streaming nativo**: Procesa eventos en tiempo real
-- **Deadletter automatico**: Manejo de errores integrado
+### Patron Medallion (Bronze -> Curated)
+- **Bronze**: Datos crudos tal como llegan del generador/ingesta
+- **Staging**: Limpieza, tipado y validacion basica (dbt)
+- **Marts**: Datos transformados y listos para analitica
 
 ### Por que dbt?
-- **SQL modular**: Transformaciones mantenibles
-- **Testing automatico**: Validacion de calidad de datos
-- **Documentacion**: Generada automaticamente
-- **Lineage**: Dependencias entre modelos
+- **SQL modular**: Transformaciones mantenibles y versionables
+- **Testing automatico**: Validacion de calidad de datos en cada ejecucion
+- **Documentacion**: Descripciones auto-generadas de modelos y columnas
+- **Lineage**: Dependencias claras entre modelos (staging -> marts)
 
 ### Por que Airflow?
-- **Orquestacion central**: Coordina todos los componentes
-- **Monitoreo**: UI para visualizar pipelines
-- **Reintentos**: Manejo de fallos automatico
+- **Orquestacion central**: Coordina ingesta, transformacion y validacion
+- **Monitoreo**: UI para visualizar estado de pipelines y logs
+- **Reintentos**: Manejo de fallos automatico con backoff
 - **Programacion**: Cron-like para ejecuciones periodicas
 
-### Patron Medallion (Bronze -> Curated)
-- **Bronze**: Datos crudos tal como llegan
-- **Staging**: Limpieza y validacion basica
-- **Curated/Marts**: Datos listos para analitica
+### Por que BigQuery?
+- **Serverless**: Sin gestion de infraestructura
+- **Free tier**: 1 TB de queries y 10 GB de almacenamiento gratis al mes
+- **Integracion nativa**: Conectores oficiales de Python y dbt
 
-## Entregables de la Fase 6
-- [x] DAG funcional con 4 tasks
-- [x] Diagrama tecnico (README + mermaid)
-- [x] Justificacion de arquitectura
-- [x] Soporte DirectRunner (testing local)
-- [x] Modelos dbt con tests
-- [x] Generador de eventos mejorado
